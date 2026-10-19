@@ -56,6 +56,7 @@ mod util;
 
 mod external_trait_impls;
 mod map;
+mod map_buckets;
 #[cfg(feature = "raw-entry")]
 mod raw_entry;
 #[cfg(feature = "rustc-internal-api")]
