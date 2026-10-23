@@ -1,7 +1,7 @@
 //! Indexed access implemented beside the private owning table. No iterator
 //! advancement, hashing, equality callback, or vacant-group scan is involved.
-use crate::alloc::Allocator;
 use crate::HashMap;
+use crate::alloc::Allocator;
 
 impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// Number of bucket indices, including vacant and deleted buckets.

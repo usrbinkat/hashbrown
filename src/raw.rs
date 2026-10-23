@@ -1,7 +1,7 @@
-use crate::control::{BitMaskIter, Group, Tag, TagSliceExt};
-use crate::scopeguard::{guard, ScopeGuard};
-use crate::util::{likely, unlikely};
 use crate::TryReserveError;
+use crate::control::{BitMaskIter, Group, Tag, TagSliceExt};
+use crate::scopeguard::{ScopeGuard, guard};
+use crate::util::{likely, unlikely};
 use core::alloc::Layout;
 use core::array;
 use core::iter::FusedIterator;
@@ -14,7 +14,7 @@ use stdalloc::alloc::handle_alloc_error;
 
 #[cfg(test)]
 use crate::alloc::AllocError;
-use crate::alloc::{do_alloc, Allocator, Global};
+use crate::alloc::{Allocator, Global, do_alloc};
 
 #[inline]
 unsafe fn offset_from<T>(to: *const T, from: *const T) -> usize {
