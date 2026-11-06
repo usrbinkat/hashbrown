@@ -37,7 +37,8 @@ The contribution is written later, by hand, from what production taught.
    is one mechanical commit in that repository and nothing else:
    - export the committed revision of this fork (`git archive <rev>`) over
      `library/hashbrown/`, without `ci/`, `.github/`, `Cross.toml` and
-     `.gitignore`;
+     `.gitignore`, and without the fork-only `AGENTS.md`, `flake.nix` and
+     `flake.lock`, which are not crate sources;
    - regenerate `library/hashbrown/SHA256SUMS` and verify every file against
      it;
    - name the exact hashbrown revision in the commit message ("Sources match
@@ -60,8 +61,12 @@ The contribution is written later, by hand, from what production taught.
 
 5. **Test.** The consumer's gates run at the pinned identity: native tests in
    every feature domain, Miri under both aliasing models (hashbrown's group
-   implementation is chosen by cfg, and the SIMD paths are off under Miri, so
-   `bucket_group_width` and bucket windows differ there), and the consumer's
+   implementation is chosen by `cfg_select!` in `src/control/group/mod.rs`;
+   at this fork's base, upstream f7c44c6, the SSE2, NEON and LSX arms are
+   all `not(miri)`, so Miri runs the generic group and `bucket_group_width`
+   and bucket windows differ there; upstream #755, "miri supports SSE and
+   neon nowadays", lifts that for SSE2 and NEON once the fork moves past
+   it), and the consumer's
    recorded evidence. A result is evidence only for the revisions it was
    produced at.
 
