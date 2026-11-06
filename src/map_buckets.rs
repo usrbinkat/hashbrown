@@ -6,6 +6,21 @@ use crate::alloc::Allocator;
 use crate::control::Group;
 use crate::{HashMap, HashTable};
 
+/// The state of one bucket, read from its control byte: never occupied, an
+/// entry removed from it, or holding an entry. A deleted bucket keeps a
+/// probe sequence that passed it running, so a scan that must tell where a
+/// collision cluster's entries were removed reads it here: `get_bucket` and
+/// `next_full_bucket` report both kinds of unoccupied bucket alike.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BucketState {
+    /// Never occupied since the table was allocated or last cleared.
+    Vacant,
+    /// Its entry was removed while its group stayed full on both sides.
+    Deleted,
+    /// Holding an entry ([`HashMap::get_bucket`] returns it).
+    Full,
+}
+
 /// The number of control bytes one group operation inspects on this target:
 /// 16 with SSE2 or LSX, 8 with NEON or the 64-bit generic implementation, 4
 /// with the 32-bit generic implementation. Execution detail only: the
@@ -52,6 +67,13 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     pub fn next_full_bucket(&self, start: usize, end: usize) -> Option<usize> {
         self.table.next_full_bucket(start, end)
     }
+
+    /// The state of the bucket at `index`, or `None` past
+    /// [`Self::num_buckets`]: one control byte read, no element.
+    #[inline]
+    pub fn bucket_state(&self, index: usize) -> Option<BucketState> {
+        self.table.bucket_state(index)
+    }
 }
 
 impl<T, A: Allocator> HashTable<T, A> {
@@ -68,11 +90,18 @@ impl<T, A: Allocator> HashTable<T, A> {
     pub fn next_full_bucket(&self, start: usize, end: usize) -> Option<usize> {
         self.raw.next_full_bucket(start, end)
     }
+
+    /// The state of the bucket at `index`, or `None` past
+    /// [`Self::num_buckets`]: one control byte read, no element.
+    #[inline]
+    pub fn bucket_state(&self, index: usize) -> Option<BucketState> {
+        self.raw.bucket_state(index)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::bucket_group_width;
+    use super::{BucketState, bucket_group_width};
     use crate::{HashMap, HashTable};
     use core::hash::{BuildHasherDefault, Hasher};
     use stdalloc::vec::Vec;
@@ -185,6 +214,75 @@ mod tests {
             tombstoned.remove(&key);
         }
         agrees("collision cluster, all but the last removed", &tombstoned);
+    }
+
+    /// Every bucket's state agrees with `get_bucket` (full exactly when it
+    /// returns an entry) and is `None` past the last bucket; a vacant and an
+    /// unallocated table hold only vacant buckets; a table whose collision
+    /// cluster lost all but its last key holds exactly one full bucket and
+    /// at least one deleted bucket; clearing leaves every bucket vacant.
+    #[test]
+    fn bucket_state_tells_deleted_from_vacant() {
+        fn states<K, V, S>(map: &HashMap<K, V, S>) -> Vec<BucketState> {
+            let buckets = map.num_buckets();
+            for index in [buckets, buckets + 1, usize::MAX] {
+                assert_eq!(map.bucket_state(index), None, "{index} of {buckets}");
+            }
+            (0..buckets)
+                .map(|index| {
+                    let state = map.bucket_state(index).expect("an index below num_buckets");
+                    assert_eq!(
+                        state == BucketState::Full,
+                        map.get_bucket(index).is_some(),
+                        "bucket {index}"
+                    );
+                    state
+                })
+                .collect()
+        }
+        let count = |states: &[BucketState], state| states.iter().filter(|s| **s == state).count();
+        let vacant: HashMap<u64, u64, BuildHasherDefault<Spread>> =
+            HashMap::with_capacity_and_hasher(1000, BuildHasherDefault::default());
+        let all = states(&vacant);
+        assert_eq!(count(&all, BucketState::Vacant), all.len());
+        let unallocated: HashMap<u64, u64, BuildHasherDefault<Spread>> = HashMap::default();
+        assert_eq!(states(&unallocated), [BucketState::Vacant]);
+        let mut cluster: HashMap<u64, u64, BuildHasherDefault<Colliding>> = HashMap::default();
+        for key in 0..1024 {
+            cluster.insert(key, key);
+        }
+        for key in 0..1023 {
+            cluster.remove(&key);
+        }
+        let tombstoned = states(&cluster);
+        assert_eq!(count(&tombstoned, BucketState::Full), 1);
+        assert!(
+            count(&tombstoned, BucketState::Deleted) > 0,
+            "a cluster emptied but for its last key holds no deleted bucket"
+        );
+        cluster.clear();
+        let cleared = states(&cluster);
+        assert_eq!(count(&cleared, BucketState::Vacant), cleared.len());
+    }
+
+    /// A hash table's bucket states are its own, read as a map's are.
+    #[test]
+    fn bucket_state_on_a_hash_table() {
+        let hash = |value: &u64| value.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let mut table = HashTable::new();
+        assert_eq!(table.bucket_state(0), Some(BucketState::Vacant));
+        assert_eq!(table.bucket_state(1), None);
+        for value in 0..300u64 {
+            table.insert_unique(hash(&value), value, hash);
+        }
+        for index in 0..table.num_buckets() {
+            assert_eq!(
+                table.bucket_state(index) == Some(BucketState::Full),
+                table.get_bucket(index).is_some(),
+                "bucket {index}"
+            );
+        }
+        assert_eq!(table.bucket_state(table.num_buckets()), None);
     }
 
     #[test]

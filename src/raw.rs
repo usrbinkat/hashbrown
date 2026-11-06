@@ -1,5 +1,6 @@
 use crate::TryReserveError;
 use crate::control::{BitMaskIter, Group, Tag, TagSliceExt};
+use crate::map_buckets::BucketState;
 use crate::scopeguard::{ScopeGuard, guard};
 use crate::util::{likely, unlikely};
 use core::alloc::Layout;
@@ -1283,6 +1284,29 @@ impl<T, A: Allocator> RawTable<T, A> {
             at += Group::WIDTH;
         }
         None
+    }
+
+    /// The state of the bucket at `index`, read from its one control byte, or
+    /// `None` past [`Self::num_buckets`]: [`BucketState::Full`] exactly when
+    /// [`Self::get_bucket`] returns an element, and otherwise
+    /// [`BucketState::Vacant`] for a never-occupied (`EMPTY`) bucket and
+    /// [`BucketState::Deleted`] for a removed one (`DELETED`), which
+    /// `get_bucket` does not tell apart.
+    #[inline]
+    pub(crate) fn bucket_state(&self, index: usize) -> Option<BucketState> {
+        if index >= self.num_buckets() {
+            return None;
+        }
+        // SAFETY: `index < self.num_buckets()`, within the control bytes, which
+        // are initialized (the static empty group when unallocated).
+        let tag = unsafe { *self.table.ctrl(index) };
+        Some(if tag.is_full() {
+            BucketState::Full
+        } else if tag.special_is_empty() {
+            BucketState::Vacant
+        } else {
+            BucketState::Deleted
+        })
     }
 
     /// Returns a pointer to an element in the table, but only after verifying that
